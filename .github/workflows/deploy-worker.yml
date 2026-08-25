@@ -1,0 +1,54 @@
+name: deploy-worker
+
+# Shared deploy pipeline for the Cloudflare Workers in this account.
+# Callers keep their own trigger, their own Cloudflare token, and their own
+# node version; this workflow only owns the order of the steps.
+on:
+  workflow_call:
+    inputs:
+      worker-dir:
+        description: Directory holding the wrangler configuration.
+        type: string
+        default: '.'
+      web-filter:
+        description: pnpm filter for the browser asset build. Empty skips the build.
+        type: string
+        default: ''
+    secrets:
+      CLOUDFLARE_API_TOKEN:
+        required: true
+      CLOUDFLARE_ACCOUNT_ID:
+        required: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # full history + tags so `git describe` can stamp a version
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: mise.toml # the calling repository owns its node version
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      # Gate: a failing test stops the deploy.
+      - run: pnpm test
+
+      # Worker-served assets have to exist before the upload.
+      - if: inputs.web-filter != ''
+        run: pnpm --filter ${{ inputs.web-filter }} run build
+
+      - name: Deploy Worker
+        run: pnpm exec wrangler deploy
+        working-directory: ${{ inputs.worker-dir }}
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
