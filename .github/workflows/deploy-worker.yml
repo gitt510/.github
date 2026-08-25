@@ -17,8 +17,6 @@ on:
     secrets:
       CLOUDFLARE_API_TOKEN:
         required: true
-      CLOUDFLARE_ACCOUNT_ID:
-        required: true
 
 jobs:
   deploy:
@@ -50,5 +48,5 @@ jobs:
         run: pnpm exec wrangler deploy
         working-directory: ${{ inputs.worker-dir }}
         env:
+          # An account-owned token carries its account, so wrangler resolves it.
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}

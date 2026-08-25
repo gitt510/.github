@@ -17,7 +17,6 @@ jobs:
       web-filter: '@mybibles/web'   # default: no asset build
     secrets:
       CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
 ```
 
 | Input | Meaning |
@@ -28,9 +27,12 @@ jobs:
 The node version comes from the calling repository's `mise.toml`, so local
 shells and CI read one file.
 
+No account id is passed. An account-owned Cloudflare token is bound to one
+account, so wrangler resolves the account from the token itself.
+
 Secrets belong to the calling repository. This repository stores no
 credentials; the `secrets` block above is a requirement, not a store. Callers
-pass the two secrets explicitly rather than with `inherit`, so a change here
+name the secret explicitly rather than using `inherit`, so a change here
 cannot reach an unrelated secret.
 
 Pin the version with a tag. `@main` would let a later change to this
