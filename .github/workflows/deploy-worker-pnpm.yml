@@ -1,22 +1,37 @@
-name: deploy-worker
+name: deploy-worker-pnpm
 
 # Shared deploy pipeline for the Cloudflare Workers in this account.
 # Callers keep their own trigger, their own Cloudflare token, and their own
 # node version; this workflow only owns the order of the steps.
+#
+# This workflow deploys; it does not test. Gate merges with PR CI and branch
+# protection, or put a `test` job with `needs:` in the calling workflow.
+#
+# Contract with callers — this workflow assumes:
+#   - a pnpm workspace (pnpm-lock.yaml at the repository root)
+#   - mise.toml at the repository root declaring the node version
 on:
   workflow_call:
     inputs:
-      worker-dir:
-        description: Directory holding the wrangler configuration.
+      working-directory:
+        description: >-
+          Directory holding the wrangler configuration.
+          `wrangler deploy` runs here.
         type: string
         default: '.'
-      web-filter:
-        description: pnpm filter for the browser asset build. Empty skips the build.
+      assets-package:
+        description: >-
+          pnpm workspace package (the `name` in its package.json) whose
+          `build` script produces the static assets the Worker serves.
+          Empty skips the build.
         type: string
         default: ''
     secrets:
       CLOUDFLARE_API_TOKEN:
         required: true
+
+permissions:
+  contents: read
 
 jobs:
   deploy:
@@ -37,16 +52,14 @@ jobs:
 
       - run: pnpm install --frozen-lockfile
 
-      # Gate: a failing test stops the deploy.
-      - run: pnpm test
-
       # Worker-served assets have to exist before the upload.
-      - if: inputs.web-filter != ''
-        run: pnpm --filter ${{ inputs.web-filter }} run build
+      # --fail-if-no-match: a typo'd package name must fail here, not deploy stale assets.
+      - if: inputs.assets-package != ''
+        run: pnpm --filter "${{ inputs.assets-package }}" --fail-if-no-match run build
 
       - name: Deploy Worker
         run: pnpm exec wrangler deploy
-        working-directory: ${{ inputs.worker-dir }}
+        working-directory: ${{ inputs.working-directory }}
         env:
           # An account-owned token carries its account, so wrangler resolves it.
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
