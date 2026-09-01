@@ -9,7 +9,7 @@ name: deploy-worker-pnpm
 #
 # Contract with callers — this workflow assumes:
 #   - a pnpm workspace (pnpm-lock.yaml at the repository root)
-#   - mise.toml at the repository root declaring the node version
+#   - mise.toml at the repository root declaring the node and pnpm versions
 on:
   workflow_call:
     inputs:
@@ -41,14 +41,8 @@ jobs:
         with:
           fetch-depth: 0 # full history + tags so `git describe` can stamp a version
 
-      - uses: pnpm/action-setup@v4
-        with:
-          version: 10
-
-      - uses: actions/setup-node@v4
-        with:
-          node-version-file: mise.toml # the calling repository owns its node version
-          cache: pnpm
+      # The calling repository owns its node and pnpm versions via mise.toml.
+      - uses: jdx/mise-action@v2
 
       - run: pnpm install --frozen-lockfile
 
