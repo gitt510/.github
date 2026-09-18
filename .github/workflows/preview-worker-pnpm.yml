@@ -5,9 +5,11 @@ name: preview-worker-pnpm
 # Uploads the PR head as a Worker *version* (`wrangler versions upload`) —
 # production traffic is untouched — and records the version's preview URL as a
 # GitHub Deployment in a per-PR environment. The link then shows up in the PR
-# sidebar and merge box; nothing is posted as a comment. When the PR closes the
-# environment is deleted, which takes its deployments with it. Cloudflare keeps
-# a rolling window of versions and prunes the rest; nothing to clean up there.
+# sidebar and merge box; nothing is posted as a comment. When the PR closes its
+# deployments are marked inactive, which retires the link. (The `pr-<n>`
+# environment itself stays listed under Settings → Environments: deleting one
+# needs `administration: write`, which GITHUB_TOKEN cannot carry.) Cloudflare
+# keeps a rolling window of versions and prunes the rest; nothing to clean up.
 #
 # Contract with callers — same as deploy-worker-pnpm:
 #   - a pnpm workspace (pnpm-lock.yaml at the repository root)
@@ -88,7 +90,8 @@ jobs:
             '{state:"success", environment_url:$url, log_url:$log, auto_inactive:true}' \
             | gh api "repos/${GITHUB_REPOSITORY}/deployments/${id}/statuses" --input - > /dev/null
 
-  # PR closed (merged or not): drop the environment, and its deployments with it.
+  # PR closed (merged or not): retire the preview link by marking every
+  # deployment in the PR's environment inactive.
   cleanup:
     if: github.event.action == 'closed'
     runs-on: ubuntu-latest
@@ -96,4 +99,10 @@ jobs:
       GH_TOKEN: ${{ github.token }}
       ENVIRONMENT: pr-${{ github.event.pull_request.number }}
     steps:
-      - run: gh api -X DELETE "repos/${GITHUB_REPOSITORY}/environments/${ENVIRONMENT}" || true
+      - run: |
+          gh api "repos/${GITHUB_REPOSITORY}/deployments?environment=${ENVIRONMENT}&per_page=100" --jq '.[].id' \
+            | while read -r id; do
+                gh api "repos/${GITHUB_REPOSITORY}/deployments/${id}/statuses" \
+                  -f state=inactive -f description="PR closed" > /dev/null
+                echo "deployment ${id}: inactive"
+              done
