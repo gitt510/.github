@@ -1,0 +1,99 @@
+name: preview-worker-pnpm
+
+# Shared PR preview for the Cloudflare Workers in this account.
+#
+# Uploads the PR head as a Worker *version* (`wrangler versions upload`) —
+# production traffic is untouched — and records the version's preview URL as a
+# GitHub Deployment in a per-PR environment. The link then shows up in the PR
+# sidebar and merge box; nothing is posted as a comment. When the PR closes the
+# environment is deleted, which takes its deployments with it. Cloudflare keeps
+# a rolling window of versions and prunes the rest; nothing to clean up there.
+#
+# Contract with callers — same as deploy-worker-pnpm:
+#   - a pnpm workspace (pnpm-lock.yaml at the repository root)
+#   - mise.toml at the repository root declaring the node and pnpm versions
+#   - the Worker has a workers.dev subdomain (preview URLs are on by default)
+#
+# Callers trigger on `pull_request` with `types: [opened, synchronize, reopened, closed]`
+# and grant `deployments: write` (plus `contents: read`) to the job.
+on:
+  workflow_call:
+    inputs:
+      working-directory:
+        description: Directory holding the wrangler configuration.
+        type: string
+        default: '.'
+      assets-package:
+        description: >-
+          pnpm workspace package whose `build` script produces the static
+          assets the Worker serves. Empty skips the build.
+        type: string
+        default: ''
+    secrets:
+      CLOUDFLARE_API_TOKEN:
+        required: true
+
+permissions:
+  contents: read
+  deployments: write
+
+jobs:
+  preview:
+    if: github.event.action != 'closed'
+    runs-on: ubuntu-latest
+    env:
+      ENVIRONMENT: pr-${{ github.event.pull_request.number }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: jdx/mise-action@v2
+
+      - run: pnpm install --frozen-lockfile
+
+      - if: inputs.assets-package != ''
+        run: pnpm --filter "${{ inputs.assets-package }}" --fail-if-no-match run build
+
+      - name: Upload Worker version
+        id: upload
+        working-directory: ${{ inputs.working-directory }}
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        run: |
+          set -o pipefail
+          pnpm exec wrangler versions upload \
+            --message "PR #${{ github.event.pull_request.number }} ${{ github.event.pull_request.head.sha }}" \
+            | tee upload.log
+          url="$(sed -n 's/.*Version Preview URL: *\(https:[^ ]*\).*/\1/p' upload.log | tail -n1)"
+          if [ -z "$url" ]; then
+            echo "::error::wrangler printed no preview URL — is workers.dev enabled for this Worker?"
+            exit 1
+          fi
+          echo "url=$url" >> "$GITHUB_OUTPUT"
+          echo "Preview: $url" >> "$GITHUB_STEP_SUMMARY"
+
+      # Deployment → the PR sidebar and merge box show "View deployment".
+      # A new success in the same environment auto-inactivates the previous one.
+      - name: Record deployment
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SHA: ${{ github.event.pull_request.head.sha }}
+          URL: ${{ steps.upload.outputs.url }}
+        run: |
+          id="$(jq -n --arg ref "$SHA" --arg env "$ENVIRONMENT" \
+            '{ref:$ref, environment:$env, auto_merge:false, required_contexts:[], transient_environment:true, description:"Worker preview"}' \
+            | gh api "repos/${GITHUB_REPOSITORY}/deployments" --input - --jq .id)"
+          jq -n --arg url "$URL" --arg log "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}" \
+            '{state:"success", environment_url:$url, log_url:$log, auto_inactive:true}' \
+            | gh api "repos/${GITHUB_REPOSITORY}/deployments/${id}/statuses" --input - > /dev/null
+
+  # PR closed (merged or not): drop the environment, and its deployments with it.
+  cleanup:
+    if: github.event.action == 'closed'
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+      ENVIRONMENT: pr-${{ github.event.pull_request.number }}
+    steps:
+      - run: gh api -X DELETE "repos/${GITHUB_REPOSITORY}/environments/${ENVIRONMENT}" || true
